@@ -27,7 +27,6 @@ npm run dev:memoria   # sem credenciais: dados em memória (bom para testar o fr
 npm run dev           # com o Firestore (precisa do .env)
 npm test              # testes de domínio e de ponta a ponta (repositório em memória)
 npm run segredo       # gera um valor para JWT_SECRET
-npm run migrar        # simula a migração do Supabase (--gravar para aplicar)
 ```
 
 ## Rotas
@@ -113,17 +112,6 @@ Fluxo esperado:
 2. Em *Settings → Environment Variables*, cadastre `JWT_SECRET`, `JWT_EXPIRES_IN`,
    `CORS_ORIGINS`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` e `FIREBASE_PRIVATE_KEY`.
 
-## Migração do Supabase
-
-```bash
-npm run migrar              # mostra o que seria migrado (funciona sem o Firebase configurado)
-npm run migrar -- --gravar  # grava no Firestore
-```
-
-Precisa de `SUPABASE_DATABASE_URL` no `.env`. Nada é apagado no Supabase. Usuário que já
-existe no Firestore é pulado, então o script pode rodar de novo. Regras completas em
-[docs/MODELAGEM.md](docs/MODELAGEM.md#migração-do-supabase).
-
 ## Estrutura
 
 ```
@@ -142,7 +130,6 @@ src/servicos/apresentar.js      compras com loja e categoria resolvidas
 src/routes/                     /auth, /cartoes, /faturas, /compras, /importacoes, /lojas, /ignorados
 src/repositorios/firestore.js   acesso ao Firestore (firebase-admin)
 src/repositorios/memoria.js     mesma interface, em memória (testes e dev:memoria)
-scripts/migrar-supabase.js
 test/                           testes (OFX sintéticos: arquivos reais não entram no repositório)
 docs/MODELAGEM.md               modelo de dados e regras de negócio
 ```

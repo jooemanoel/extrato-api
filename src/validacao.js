@@ -59,8 +59,7 @@ export function validarCredenciais(corpo, { cadastro = false } = {}) {
     throw new ErroHttp(400, `A senha deve ter no máximo ${LIMITES.senha.max} caracteres`);
   }
 
-  // As regras de tamanho mínimo valem só para contas novas:
-  // usuários migrados do app antigo podem ter nomes e senhas mais curtos.
+  // As regras de tamanho mínimo valem só no cadastro: no login, basta conferir a senha.
   if (cadastro) {
     const { min, max } = LIMITES.nomeUsuario;
     if (nome.length < min || nome.length > max) {

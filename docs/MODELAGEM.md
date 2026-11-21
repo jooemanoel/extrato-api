@@ -50,7 +50,7 @@ OFX**: negativo é gasto.
 
 | Campo | |
 |---|---|
-| `nome` | vem do nome do arquivo (`OUROCARD VISA INFINITE`); editável. Cartões migrados começam como `CARTÃO FINAL 5678` e ganham o nome na primeira importação. |
+| `nome` | vem do nome do arquivo (`OUROCARD VISA INFINITE`); editável. |
 | `numero` | `ACCTID` mascarado |
 | `criadoEm` | |
 
@@ -62,7 +62,7 @@ A **competência** `AAAA-MM` é o mês de **vencimento**: `Nov_26` vira `2026-11
 |---|---|
 | `cartaoId`, `competencia` | |
 | `situacao` | `aberta` ou `fechada`. Uma vez fechada, não volta a ser aberta. |
-| `totalBanco` | `LEDGERBAL` da fatura fechada, para conferência (`null` na aberta e nas migradas) |
+| `totalBanco` | `LEDGERBAL` da fatura fechada, para conferência (`null` na aberta) |
 | `totalCompras`, `quantidade` | mantidos pela API a cada importação, compra manual ou exclusão |
 | `inicio`, `fim` | menor e maior data das compras que não são parcela (recalculados a cada importação) |
 | `pagamento` | `{ data, valor }`, preenchido pela linha PGTO do arquivo da fatura seguinte |
@@ -209,19 +209,6 @@ O usuário sempre tem a palavra final:
   que fica, inclusive as escolhas manuais.
 - **Escolher à mão.** `PATCH /compras/:id { lojaId }` escolhe a loja de uma compra; `lojaId: null`
   devolve a compra ao reconhecimento automático.
-
-## Migração do Supabase
-
-[scripts/migrar-supabase.js](../scripts/migrar-supabase.js). Simulação feita em 21/11/2026:
-
-- 1 usuário com dados (os outros 6 não tinham compras e ficam de fora; `--todos-usuarios` os inclui).
-- 1.652 compras e 27 faturas: as 16 antigas misturavam os dois cartões e foram separadas
-  (15 do Visa e 12 do Elo). A "MARÇO 2026" estava vazia.
-- 93 linhas de `loja` viram 45 lojas (agrupadas por `nome_fantasia`). Elas reconhecem 1.201
-  compras; 451 ficam para as sugestões.
-- **Categoria**: nenhuma compra antiga tinha categoria sem loja ou diferente da loja, então
-  derivar a categoria da loja não perde nada.
-- **Senhas**: os hashes bcrypt (`$2b$`) são copiados como estão.
 
 ## Pendências e limitações
 

@@ -13,7 +13,6 @@
     "dev": "node --env-file=.env --watch src/index.js",
     "dev:memoria": "node --watch src/index.js --memoria",
     "test": "node --test",
-    "migrar": "node --env-file=.env scripts/migrar-supabase.js",
     "segredo": "node -e \"console.log(require('node:crypto').randomBytes(48).toString('base64url'))\""
   },
   "dependencies": {
@@ -23,8 +22,5 @@
     "express-rate-limit": "^8.7.5",
     "firebase-admin": "^14.5.1",
     "jsonwebtoken": "^9.0.3"
-  },
-  "devDependencies": {
-    "postgres": "^3.4.7"
   }
 }

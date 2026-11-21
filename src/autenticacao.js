@@ -5,7 +5,6 @@ import { ErroHttp } from "./validacao.js";
 
 // Custo 11: ~2^11 rodadas. Lento o bastante para atrapalhar força bruta,
 // rápido o bastante para um login em função serverless.
-// Hashes migrados do Supabase ($2b$, custo 10) continuam válidos: o bcrypt lê o custo do próprio hash.
 const CUSTO_BCRYPT = 11;
 const EMISSOR = "extrato-api";
 
