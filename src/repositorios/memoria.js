@@ -109,6 +109,9 @@ export function criarRepositorioMemoria() {
     async comprasPendentes(u) {
       return [...doUsuario(u).compras.values()].filter((c) => c.pendente).map(copiar);
     },
+    async contarPendentes(u) {
+      return [...doUsuario(u).compras.values()].filter((c) => c.pendente).length;
+    },
     async comprasPorLoja(u, lojaId) {
       return [...doUsuario(u).compras.values()].filter((c) => c.lojaId === lojaId).map(copiar);
     },

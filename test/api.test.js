@@ -200,6 +200,9 @@ describe("lojas", () => {
     lojaId = r.dados.loja.id;
     assert.deepEqual(r.dados.loja.padroes, [{ tipo: "prefixo", texto: "AMERICANAS" }]);
     assert.equal(r.dados.comprasAtualizadas, 2); // a do João e a da Maria: lojas são compartilhadas
+    // Pendências só de quem criou (o João): a compra dele saiu das sugestões.
+    assert.equal(r.dados.pendencias.novas, 0);
+    assert.deepEqual(r.dados.pendencias.resolvidas.map((x) => [x.estabelecimento, x.quantidade]), [["AMERICANASF485BA", 1]]);
 
     const fatura = (await chamar("GET", "/faturas/3333-4444_2027-01", { token: maria })).dados;
     assert.equal(fatura.compras[0].loja.nome, "AMERICANAS");
@@ -237,6 +240,7 @@ describe("lojas", () => {
   test("excluir a loja devolve as compras às sugestões", async () => {
     const r = await chamar("DELETE", `/lojas/${lojaId}`, { token: joao });
     assert.equal(r.dados.comprasAtualizadas, 2);
+    assert.equal(r.dados.pendencias.novas, 1);
     const sugestoes = (await chamar("GET", "/lojas/sugestoes", { token: maria })).dados;
     assert.ok(sugestoes.some((s) => s.nome === "AMERICANAS"));
   });
@@ -247,6 +251,8 @@ describe("lojas", () => {
     assert.equal(r.dados.comprasAtualizadas, 1);
     const sugestoes = (await chamar("GET", "/lojas/sugestoes", { token: joao })).dados;
     assert.ok(!sugestoes.some((s) => s.estabelecimentos.includes("CAPITALGAS")));
+    const contagem = (await chamar("GET", "/lojas/sugestoes/contagem", { token: joao })).dados;
+    assert.equal(contagem.quantidade, sugestoes.reduce((soma, s) => soma + s.quantidade, 0));
     assert.equal((await chamar("DELETE", "/ignorados/CAPITALGAS", { token: joao })).dados.comprasAtualizadas, 1);
   });
 });

@@ -8,6 +8,7 @@ import { rotasCartoes, rotasFaturas } from "./routes/faturas.js";
 import { rotasImportacoes } from "./routes/importacoes.js";
 import { rotasCategorias, rotasIgnorados, rotasLojas } from "./routes/lojas.js";
 import { ErroHttp } from "./validacao.js";
+import { registrarLeituras } from "./leituras.js";
 
 export function criarApp({ repo, config }) {
   const app = express();
@@ -28,6 +29,8 @@ export function criarApp({ repo, config }) {
   // com o corpo já lido, o seguinte não lê de novo.
   app.use("/importacoes", express.json({ limit: "2mb" }));
   app.use(express.json({ limit: "50kb" }));
+  // Depois dos leitores de JSON: o contexto da contagem vale para tudo o que a rota fizer.
+  app.use(registrarLeituras);
 
   // Respostas com dados do usuário nunca devem ficar em cache compartilhado.
   app.use((req, res, next) => {

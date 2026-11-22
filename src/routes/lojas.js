@@ -28,6 +28,12 @@ const unirPadroes = (...listas) => {
   });
 };
 
+/** O que a resposta conta do recálculo: total de compras alteradas e as pendências de quem pediu. */
+const resumo = (reprocessado) => ({
+  comprasAtualizadas: reprocessado?.alteradas ?? 0,
+  pendencias: reprocessado?.pendencias ?? { resolvidas: [], novas: 0 },
+});
+
 function exigirSemConflito(padroes, lojas, lojaIdAtual) {
   const conflitos = padroesEmConflito(padroes, lojas, lojaIdAtual);
   if (conflitos.length) {
@@ -48,6 +54,11 @@ export function rotasLojas({ repo, config }) {
   router.get("/sugestoes", async (req, res) => {
     const [pendentes, lojas] = await Promise.all([repo.comprasPendentes(req.usuario.id), repo.listarLojas()]);
     res.json(agruparSugestoes(pendentes, lojas));
+  });
+
+  /** { quantidade }: quantas compras do usuário estão sem loja, sem ler as compras (para o aviso do início). */
+  router.get("/sugestoes/contagem", async (req, res) => {
+    res.json({ quantidade: await repo.contarPendentes(req.usuario.id) });
   });
 
   /**
@@ -124,8 +135,8 @@ export function rotasLojas({ repo, config }) {
         lojaId: existente?.id ?? null,
       });
     }
-    const comprasAtualizadas = await reprocessar(repo, { padroes });
-    res.status(201).json({ loja, comprasAtualizadas });
+    const reprocessado = await reprocessar(repo, { padroes }, req.usuario.id);
+    res.status(201).json({ loja, ...resumo(reprocessado) });
   });
 
   /** { nome?, categoria?, padroes? } — padroes substitui a lista inteira. */
@@ -143,17 +154,17 @@ export function rotasLojas({ repo, config }) {
     }));
     if (!loja) throw new ErroHttp(404, "Loja não encontrada");
 
-    const comprasAtualizadas = campos.padroes
-      ? await reprocessar(repo, { padroes: unirPadroes(atual.padroes, campos.padroes), lojaIds: [atual.id] })
-      : 0;
-    res.json({ loja, comprasAtualizadas });
+    const reprocessado = campos.padroes
+      ? await reprocessar(repo, { padroes: unirPadroes(atual.padroes, campos.padroes), lojaIds: [atual.id] }, req.usuario.id)
+      : null;
+    res.json({ loja, ...resumo(reprocessado) });
   });
 
   router.delete("/:id", async (req, res) => {
     const loja = await repo.excluirLoja(req.params.id);
     if (!loja) throw new ErroHttp(404, "Loja não encontrada");
-    const comprasAtualizadas = await reprocessar(repo, { lojaIds: [loja.id] });
-    res.json({ comprasAtualizadas });
+    const reprocessado = await reprocessar(repo, { lojaIds: [loja.id] }, req.usuario.id);
+    res.json({ ...resumo(reprocessado) });
   });
 
   /** { origemId }: a loja origem some; os padrões e as compras dela passam para esta. */
@@ -170,11 +181,11 @@ export function rotasLojas({ repo, config }) {
       atualizadoEm: new Date().toISOString(),
     }));
     await repo.excluirLoja(origem.id);
-    const comprasAtualizadas = await reprocessar(repo, {
+    const reprocessado = await reprocessar(repo, {
       lojaIds: [origem.id],
       redirecionar: { de: origem.id, para: destino.id },
-    });
-    res.json({ loja, comprasAtualizadas });
+    }, req.usuario.id);
+    res.json({ loja, ...resumo(reprocessado) });
   });
 
   return router;
@@ -193,15 +204,15 @@ export function rotasIgnorados({ repo, config }) {
     const estabelecimento = validarEstabelecimento(req.body?.estabelecimento);
     const criado = await repo.ignorar({ estabelecimento, ignoradoPor: req.usuario.id, em: new Date().toISOString() });
     if (!criado) throw new ErroHttp(409, "Este estabelecimento já está ignorado");
-    const comprasAtualizadas = await reprocessar(repo, { estabelecimentos: [estabelecimento] });
-    res.status(201).json({ estabelecimento, comprasAtualizadas });
+    const reprocessado = await reprocessar(repo, { estabelecimentos: [estabelecimento] }, req.usuario.id);
+    res.status(201).json({ estabelecimento, ...resumo(reprocessado) });
   });
 
   router.delete("/:estabelecimento", async (req, res) => {
     const estabelecimento = validarEstabelecimento(req.params.estabelecimento);
     if (!(await repo.desfazerIgnorado(estabelecimento))) throw new ErroHttp(404, "Estabelecimento não está ignorado");
-    const comprasAtualizadas = await reprocessar(repo, { estabelecimentos: [estabelecimento] });
-    res.json({ estabelecimento, comprasAtualizadas });
+    const reprocessado = await reprocessar(repo, { estabelecimentos: [estabelecimento] }, req.usuario.id);
+    res.json({ estabelecimento, ...resumo(reprocessado) });
   });
 
   return router;

@@ -14,6 +14,7 @@ import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { ErroHttp } from "../validacao.js";
 import { normalizar } from "../dominio/estabelecimento.js";
+import { contarLeituras } from "../leituras.js";
 
 export const COLECAO_USUARIOS = "extrato_usuarios";
 export const COLECAO_LOJAS = "extrato_lojas";
@@ -23,9 +24,10 @@ export const COLECAO_IGNORADOS = "extrato_ignorados";
 const MAXIMO_ESCRITAS = 480;
 // Consultas "in" aceitam até 30 valores.
 const LOTE_IN = 30;
-// As lojas são lidas a cada importação e listagem; um cache curto poupa leituras.
-// Escritas feitas nesta instância limpam o cache; as de outra instância aparecem em até 1 minuto.
-const VALIDADE_CACHE_LOJAS = 60_000;
+// Lojas e ignorados são lidos a cada importação, listagem e mudança de loja; um cache curto
+// poupa leituras. Escritas feitas nesta instância limpam o cache; as de outra instância
+// aparecem em até 1 minuto.
+const VALIDADE_CACHE = 60_000;
 
 export function conectarFirestore() {
   if (!getApps().length) {
@@ -47,6 +49,14 @@ export function conectarFirestore() {
 }
 
 const comId = (snap) => ({ ...snap.data(), id: snap.id });
+
+/** Registra as leituras cobradas: 1 por documento (consulta vazia conta 1) e devolve o resultado. */
+function contar(resultado) {
+  if (Array.isArray(resultado)) contarLeituras(resultado.length); // getAll
+  else if (resultado.docs) contarLeituras(Math.max(1, resultado.docs.length)); // consulta
+  else contarLeituras(1); // documento
+  return resultado;
+}
 const porDataDesc = (a, b) => b.data.localeCompare(a.data) || a.id.localeCompare(b.id);
 
 function emLotes(lista, tamanho) {
@@ -63,10 +73,13 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
   const faturas = (u) => usuarios.doc(u).collection("faturas");
   const compras = (u) => usuarios.doc(u).collection("compras");
 
-  let cacheLojas = null; // { em, lojas }
+  // Cache em memória da instância: { em, valor }.
+  let cacheLojas = null;
+  let cacheIgnorados = null;
   const limparCache = () => {
     cacheLojas = null;
   };
+  const valido = (cache) => cache && Date.now() - cache.em < VALIDADE_CACHE;
 
   const incremento = (valor, quantidade) => ({
     totalCompras: FieldValue.increment(valor),
@@ -85,7 +98,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
   return {
     // ---------- usuários ----------
     async buscarUsuario(id) {
-      const snap = await usuarios.doc(id).get();
+      const snap = contar(await usuarios.doc(id).get());
       return snap.exists ? comId(snap) : null;
     },
 
@@ -101,20 +114,20 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     },
 
     async listarUsuarioIds() {
-      const snap = await usuarios.select().get();
+      const snap = contar(await usuarios.select().get());
       return snap.docs.map((d) => d.id);
     },
 
     // ---------- cartões ----------
     async listarCartoes(u) {
-      const snap = await cartoes(u).get();
+      const snap = contar(await cartoes(u).get());
       return snap.docs.map(comId).sort((a, b) => a.nome.localeCompare(b.nome));
     },
 
     async alterarCartao(u, id, campos) {
       const ref = cartoes(u).doc(id);
       return db.runTransaction(async (t) => {
-        const snap = await t.get(ref);
+        const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         t.update(ref, campos);
         return { ...comId(snap), ...campos };
@@ -123,33 +136,33 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
 
     // ---------- faturas ----------
     async listarFaturas(u) {
-      const snap = await faturas(u).get();
+      const snap = contar(await faturas(u).get());
       return snap.docs
         .map(comId)
         .sort((a, b) => b.competencia.localeCompare(a.competencia) || a.cartaoId.localeCompare(b.cartaoId));
     },
 
     async buscarFatura(u, id) {
-      const snap = await faturas(u).doc(id).get();
+      const snap = contar(await faturas(u).doc(id).get());
       return snap.exists ? comId(snap) : null;
     },
 
     async excluirFatura(u, id) {
       const ref = faturas(u).doc(id);
-      if (!(await ref.get()).exists) return false;
-      const doFatura = await compras(u).where("faturaId", "==", id).select().get();
+      if (!contar(await ref.get()).exists) return false;
+      const doFatura = contar(await compras(u).where("faturaId", "==", id).select().get());
       await gravarEmLotes([...doFatura.docs.map((d) => (b) => b.delete(d.ref)), (b) => b.delete(ref)]);
       return true;
     },
 
     // ---------- compras ----------
     async listarComprasDaFatura(u, faturaId) {
-      const snap = await compras(u).where("faturaId", "==", faturaId).get();
+      const snap = contar(await compras(u).where("faturaId", "==", faturaId).get());
       return snap.docs.map(comId).sort(porDataDesc);
     },
 
     async buscarCompra(u, id) {
-      const snap = await compras(u).doc(id).get();
+      const snap = contar(await compras(u).doc(id).get());
       return snap.exists ? comId(snap) : null;
     },
 
@@ -158,7 +171,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       const refFatura = faturas(u).doc(compra.faturaId);
       const ref = compras(u).doc();
       return db.runTransaction(async (t) => {
-        if (!(await t.get(refFatura)).exists) return null;
+        if (!contar(await t.get(refFatura)).exists) return null;
         const { id, ...dados } = compra;
         t.create(ref, dados);
         t.update(refFatura, incremento(compra.valor, 1));
@@ -170,7 +183,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     async alterarCompra(u, id, alterar) {
       const ref = compras(u).doc(id);
       return db.runTransaction(async (t) => {
-        const snap = await t.get(ref);
+        const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         const atual = comId(snap);
         const campos = alterar(structuredClone(atual));
@@ -186,11 +199,11 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     async excluirCompra(u, id) {
       const ref = compras(u).doc(id);
       return db.runTransaction(async (t) => {
-        const snap = await t.get(ref);
+        const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         const atual = comId(snap);
         const refFatura = faturas(u).doc(atual.faturaId);
-        const fatura = await t.get(refFatura);
+        const fatura = contar(await t.get(refFatura));
         t.delete(ref);
         if (fatura.exists) t.update(refFatura, incremento(-atual.valor, -1));
         return atual;
@@ -198,28 +211,36 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     },
 
     async comprasPendentes(u) {
-      const snap = await compras(u).where("pendente", "==", true).get();
+      const snap = contar(await compras(u).where("pendente", "==", true).get());
       return snap.docs.map(comId);
     },
 
+    /** Quantas compras estão sem loja. Contagem do Firestore: 1 leitura a cada 1000 compras. */
+    async contarPendentes(u) {
+      const snap = await compras(u).where("pendente", "==", true).count().get();
+      const total = snap.data().count;
+      contarLeituras(Math.max(1, Math.ceil(total / 1000)));
+      return total;
+    },
+
     async comprasPorLoja(u, lojaId) {
-      const snap = await compras(u).where("lojaId", "==", lojaId).get();
+      const snap = contar(await compras(u).where("lojaId", "==", lojaId).get());
       return snap.docs.map(comId);
     },
 
     /** Compras cujo estabelecimento começa com `prefixo` (intervalo no índice automático). */
     async comprasPorPrefixo(u, prefixo) {
-      const snap = await compras(u)
+      const snap = contar(await compras(u)
         .where("estabelecimento", ">=", prefixo)
         .where("estabelecimento", "<", `${prefixo}`)
-        .get();
+        .get());
       return snap.docs.map(comId);
     },
 
     async comprasPorEstabelecimentos(u, lista) {
       const resultado = [];
       for (const lote of emLotes([...new Set(lista)], LOTE_IN)) {
-        const snap = await compras(u).where("estabelecimento", "in", lote).get();
+        const snap = contar(await compras(u).where("estabelecimento", "in", lote).get());
         resultado.push(...snap.docs.map(comId));
       }
       return resultado;
@@ -239,10 +260,10 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
      */
     async importar(u, chaves, planejar, { gravar }) {
       const executar = async (t) => {
-        const ler = (alvo) => (t ? t.get(alvo) : alvo.get());
+        const ler = async (alvo) => contar(await (t ? t.get(alvo) : alvo.get()));
         const lerVarios = async (refs) => {
           if (!refs.length) return [];
-          return t ? t.getAll(...refs) : db.getAll(...refs);
+          return contar(await (t ? t.getAll(...refs) : db.getAll(...refs)));
         };
 
         const [cartao, fatura, faturaAnterior] = await lerVarios([
@@ -297,15 +318,15 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
 
     // ---------- lojas (compartilhadas) ----------
     async listarLojas() {
-      if (cacheLojas && Date.now() - cacheLojas.em < VALIDADE_CACHE_LOJAS) return structuredClone(cacheLojas.lojas);
-      const snap = await colLojas.get();
+      if (valido(cacheLojas)) return structuredClone(cacheLojas.valor);
+      const snap = contar(await colLojas.get());
       const lista = snap.docs.map(comId).sort((a, b) => a.nome.localeCompare(b.nome));
-      cacheLojas = { em: Date.now(), lojas: lista };
+      cacheLojas = { em: Date.now(), valor: lista };
       return structuredClone(lista);
     },
 
     async buscarLoja(id) {
-      const snap = await colLojas.doc(id).get();
+      const snap = contar(await colLojas.doc(id).get());
       return snap.exists ? comId(snap) : null;
     },
 
@@ -314,7 +335,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       const nomeNormalizado = normalizar(loja.nome);
       const ref = colLojas.doc();
       const criada = await db.runTransaction(async (t) => {
-        const iguais = await t.get(colLojas.where("nomeNormalizado", "==", nomeNormalizado).limit(1));
+        const iguais = contar(await t.get(colLojas.where("nomeNormalizado", "==", nomeNormalizado).limit(1)));
         if (!iguais.empty) return null;
         const { id, ...dados } = { ...loja, nomeNormalizado };
         t.create(ref, dados);
@@ -327,13 +348,13 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     async alterarLoja(id, alterar) {
       const ref = colLojas.doc(id);
       const alterada = await db.runTransaction(async (t) => {
-        const snap = await t.get(ref);
+        const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         const atual = comId(snap);
         const nova = { ...atual, ...alterar(structuredClone(atual)) };
         nova.nomeNormalizado = normalizar(nova.nome);
         if (nova.nomeNormalizado !== atual.nomeNormalizado) {
-          const iguais = await t.get(colLojas.where("nomeNormalizado", "==", nova.nomeNormalizado).limit(2));
+          const iguais = contar(await t.get(colLojas.where("nomeNormalizado", "==", nova.nomeNormalizado).limit(2)));
           if (iguais.docs.some((d) => d.id !== id)) throw new ErroHttp(409, `Já existe uma loja chamada ${nova.nome}`);
         }
         const { id: _, ...dados } = nova;
@@ -347,7 +368,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
     async excluirLoja(id) {
       const ref = colLojas.doc(id);
       const excluida = await db.runTransaction(async (t) => {
-        const snap = await t.get(ref);
+        const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         t.delete(ref);
         return comId(snap);
@@ -358,13 +379,17 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
 
     // ---------- estabelecimentos ignorados (compartilhados) ----------
     async listarIgnorados() {
-      const snap = await colIgnorados.get();
-      return snap.docs.map((d) => ({ ...d.data(), estabelecimento: d.id }));
+      if (valido(cacheIgnorados)) return structuredClone(cacheIgnorados.valor);
+      const snap = contar(await colIgnorados.get());
+      const lista = snap.docs.map((d) => ({ ...d.data(), estabelecimento: d.id }));
+      cacheIgnorados = { em: Date.now(), valor: lista };
+      return structuredClone(lista);
     },
 
     async ignorar({ estabelecimento, ...dados }) {
       try {
         await colIgnorados.doc(estabelecimento).create(dados);
+        cacheIgnorados = null;
         return true;
       } catch (erro) {
         if (erro.code === 6) return false; // ALREADY_EXISTS
@@ -374,8 +399,9 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
 
     async desfazerIgnorado(estabelecimento) {
       const ref = colIgnorados.doc(estabelecimento);
-      if (!(await ref.get()).exists) return false;
+      if (!contar(await ref.get()).exists) return false;
       await ref.delete();
+      cacheIgnorados = null;
       return true;
     },
   };

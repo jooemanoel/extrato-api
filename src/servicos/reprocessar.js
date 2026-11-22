@@ -47,27 +47,43 @@ export async function coletarCandidatas(repo, usuarioId, alvo) {
  * Recalcula a loja das compras afetadas, em todos os usuários.
  * `alvo` como em coletarCandidatas; `redirecionar` (ao juntar lojas) passa as escolhas manuais
  * da loja que some para a loja que fica.
- * @returns número de compras alteradas
+ *
+ * `pendencias` resume, para o usuário `usuarioId` (quem fez a mudança), o que mudou nas
+ * compras sem loja, para o front-end atualizar as sugestões sem reler todas as pendentes:
+ *   resolvidas  [{ estabelecimento, quantidade, total }] compras que deixaram de estar pendentes
+ *   novas       quantas compras passaram a estar pendentes (aí o front-end relê as sugestões)
+ * @returns { alteradas, pendencias }
  */
-export async function reprocessar(repo, alvo) {
+export async function reprocessar(repo, alvo, usuarioId = null) {
   const { redirecionar = null } = alvo;
   const lojas = await repo.listarLojas();
   const ignorados = new Set((await repo.listarIgnorados()).map((i) => i.estabelecimento));
   let alteradas = 0;
+  const resolvidas = new Map();
+  let novas = 0;
 
-  for (const usuarioId of await repo.listarUsuarioIds()) {
+  for (const id of await repo.listarUsuarioIds()) {
     const mudancas = [];
-    for (let compra of await coletarCandidatas(repo, usuarioId, alvo)) {
+    for (let compra of await coletarCandidatas(repo, id, alvo)) {
       if (redirecionar && compra.lojaManual && compra.lojaId === redirecionar.de) {
         compra = { ...compra, lojaId: redirecionar.para, alterada: true };
       }
       const nova = situacaoDaLoja(compra, lojas, ignorados);
       if (compra.alterada || CAMPOS.some((c) => (compra[c] ?? null) !== (nova[c] ?? null))) {
         mudancas.push({ id: compra.id, ...nova });
+        if (id !== usuarioId || Boolean(compra.pendente) === Boolean(nova.pendente)) continue;
+        if (nova.pendente) {
+          novas++;
+        } else {
+          const r = resolvidas.get(compra.estabelecimento) ?? { estabelecimento: compra.estabelecimento, quantidade: 0, total: 0 };
+          r.quantidade++;
+          r.total += compra.valor;
+          resolvidas.set(compra.estabelecimento, r);
+        }
       }
     }
-    if (mudancas.length) await repo.atualizarCompras(usuarioId, mudancas);
+    if (mudancas.length) await repo.atualizarCompras(id, mudancas);
     alteradas += mudancas.length;
   }
-  return alteradas;
+  return { alteradas, pendencias: { resolvidas: [...resolvidas.values()], novas } };
 }
