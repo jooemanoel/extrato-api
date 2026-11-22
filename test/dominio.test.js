@@ -172,6 +172,8 @@ describe("sugestões de loja", () => {
   test("categoria por palavra-chave e lojas parecidas", () => {
     assert.equal(sugerirCategoria("DROGASIL3981"), "saude");
     assert.equal(sugerirCategoria("PRIMORSUPERMERCADO"), "mercado");
+    assert.equal(sugerirCategoria("PIZZARIADOJOAO"), "restaurante");
+    assert.equal(sugerirCategoria("CINEMARK"), "lazer");
     assert.equal(sugerirCategoria("XPTO"), null);
     const parecidas = lojasParecidas("SORVETES PRESTIGIO", [{ id: "1", nome: "SORVETERIA PRESTIGIO", categoria: "lazer", padroes: [] }]);
     assert.deepEqual(parecidas.map((l) => l.id), ["1"]);

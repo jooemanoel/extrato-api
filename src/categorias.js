@@ -3,6 +3,7 @@
 
 export const CATEGORIAS = [
   { id: "mercado", nome: "MERCADO", icone: "shopping_cart" },
+  { id: "restaurante", nome: "RESTAURANTE", icone: "restaurant" },
   { id: "saude", nome: "SAÚDE", icone: "local_hospital" },
   { id: "transporte", nome: "TRANSPORTE", icone: "directions_bus" },
   { id: "lazer", nome: "LAZER", icone: "mood" },
