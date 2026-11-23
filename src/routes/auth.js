@@ -41,7 +41,7 @@ export function rotasAuth({ repo, config }) {
 
   // Confere se o token salvo no aparelho ainda vale.
   router.get("/eu", exigirLogin(config), (req, res) => {
-    res.json({ usuario: req.usuario });
+    res.json({ usuario: { id: req.usuario.id, nome: req.usuario.nome } });
   });
 
   return router;

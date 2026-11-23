@@ -38,7 +38,7 @@ export function exigirLogin({ segredo }) {
     try {
       // O algoritmo é fixado: impede tokens forjados com "alg: none" ou outro algoritmo.
       const dados = jwt.verify(token, segredo, { algorithms: ["HS256"], issuer: EMISSOR });
-      req.usuario = { id: dados.sub, nome: dados.nome };
+      req.usuario = { id: dados.sub, nome: dados.nome, expiraEm: dados.exp * 1000 };
       next();
     } catch {
       next(new ErroHttp(401, "Sessão expirada. Faça login novamente"));

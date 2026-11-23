@@ -26,8 +26,10 @@ extrato_usuarios/{NOME}                      usuário
   cartoes/{1234-5678}                        cartão
   faturas/{1234-5678_2026-12}                fatura de um cartão num mês de vencimento
   compras/{id}                               compra (id calculado, ver abaixo)
+  exclusoes/{tipo_id}                        marcação de compra ou fatura apagada (sincronização)
 extrato_lojas/{autoId}                       loja, compartilhada entre todos os usuários
 extrato_ignorados/{ESTABELECIMENTO}          estabelecimento sem loja de propósito, compartilhado
+extrato_exclusoes/{loja_id}                  marcação de loja apagada (sincronização)
 ```
 
 O banco fica no mesmo projeto Firebase do Listas e do Questões Rápidas (`testebd-80d9e`).
@@ -209,6 +211,29 @@ O usuário sempre tem a palavra final:
   que fica, inclusive as escolhas manuais.
 - **Escolher à mão.** `PATCH /compras/:id { lojaId }` escolhe a loja de uma compra; `lojaId: null`
   devolve a compra ao reconhecimento automático.
+
+## Sincronização (modo offline)
+
+O app guarda no aparelho cartões, faturas, compras e lojas, e funciona sem internet para
+consultar e para alterar compras. A API só manda o que mudou:
+
+- **Toda gravação** em cartão, fatura, compra e loja marca `atualizadoEm` (inclusive a
+  importação, os totais da fatura e o recálculo das lojas). Documentos gravados antes dessa
+  regra não têm o campo: chegam ao aparelho na primeira carga, que traz tudo.
+- **Toda exclusão** deixa uma marcação `{ tipo, id, em }`: em `exclusoes/` do usuário para compra
+  e fatura (a de fatura vale para as compras dela) e em `extrato_exclusoes` para loja. O aparelho
+  só apaga o que não foi gravado depois da marcação (fatura excluída e importada de novo fica).
+- `GET /sincronizacao?desde=` devolve o que foi gravado depois de `desde` menos 2 minutos
+  de folga (o horário é marcado antes de a gravação chegar ao banco); o repetido o aparelho
+  grava de novo. Sem `desde`, tudo. Também renova o token que vence em menos de 15 dias.
+- `POST /sincronizacao` recebe a fila de alterações de compras feitas no aparelho (criar,
+  alterar, excluir), na ordem. Reenviar é seguro: a compra criada no aparelho traz o id dela.
+  Vale a última alteração que chegar; não há detecção de conflito (cada conta é de uma pessoa).
+- Importar, sugestões e mudanças de loja, excluir fatura e renomear cartão continuam só online.
+
+Custo: a primeira carga de um aparelho lê todos os documentos do usuário e as lojas; depois,
+cada sincronização lê 6 consultas (mínimo de 1 leitura cada) mais o que mudou. As marcações de
+exclusão não são apagadas; são poucas e pequenas.
 
 ## Pendências e limitações
 

@@ -20,6 +20,7 @@ export const LIMITES = {
   descricao: 80,
   arquivo: 1_000_000, // caracteres; uma fatura grande tem ~25 KB
   valorMaximo: 100_000_000, // centavos (R$ 1 milhão)
+  operacoesPorLote: 200,
 };
 
 /**
@@ -226,4 +227,60 @@ export function validarEstabelecimento(valor) {
   const estabelecimento = normalizar(valor);
   if (!estabelecimento) throw new ErroHttp(400, "Estabelecimento inválido");
   return estabelecimento;
+}
+
+// ---------- Sincronização ----------
+
+/** Id de compra gerado no aparelho (mesmo formato dos ids automáticos do Firestore). */
+const ID_DO_APARELHO = /^[A-Za-z0-9]{20}$/;
+
+/** "?desde=" da sincronização: um instante ISO, ou nada (primeira carga). */
+export function validarDesde(valor) {
+  if (valor == null || valor === "") return null;
+  if (typeof valor !== "string" || Number.isNaN(Date.parse(valor))) {
+    throw new ErroHttp(400, 'Parâmetro "desde" deve ser uma data ISO');
+  }
+  return new Date(valor).toISOString();
+}
+
+/** Corpo de POST /sincronizacao: { operacoes: [...] }. Cada operação é validada à parte. */
+export function validarLote(corpo) {
+  const operacoes = corpo?.operacoes;
+  if (!Array.isArray(operacoes)) throw new ErroHttp(400, 'Campo "operacoes" deve ser uma lista');
+  if (operacoes.length > LIMITES.operacoesPorLote) {
+    throw new ErroHttp(413, `No máximo ${LIMITES.operacoesPorLote} operações por vez`);
+  }
+  return operacoes;
+}
+
+function idDeCompra(valor) {
+  if (typeof valor !== "string" || !valor || valor.length > 200 || valor.includes("/")) {
+    throw new ErroHttp(400, 'Campo "compraId" inválido');
+  }
+  return valor;
+}
+
+/**
+ * Uma alteração feita no aparelho (talvez offline):
+ *   { id, tipo: "criarCompra", compraId, faturaId, data, valor, descricao }   compraId gerado no aparelho
+ *   { id, tipo: "alterarCompra", compraId, campos: { descricao?, lojaId?, data?, valor? } }
+ *   { id, tipo: "excluirCompra", compraId }
+ * `id` identifica a operação na resposta.
+ */
+export function validarOperacao(op) {
+  if (!op || typeof op !== "object") throw new ErroHttp(400, "Operação inválida");
+  const base = { id: typeof op.id === "string" ? op.id.slice(0, 64) : null, tipo: op.tipo };
+  switch (op.tipo) {
+    case "criarCompra":
+      if (typeof op.compraId !== "string" || !ID_DO_APARELHO.test(op.compraId)) {
+        throw new ErroHttp(400, 'Campo "compraId" inválido');
+      }
+      return { ...base, compraId: op.compraId, ...validarNovaCompra(op) };
+    case "alterarCompra":
+      return { ...base, compraId: idDeCompra(op.compraId), campos: validarAlteracaoCompra(op.campos) };
+    case "excluirCompra":
+      return { ...base, compraId: idDeCompra(op.compraId) };
+    default:
+      throw new ErroHttp(400, "Operação desconhecida");
+  }
 }

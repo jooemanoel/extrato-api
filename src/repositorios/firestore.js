@@ -6,8 +6,14 @@
 //   extrato_usuarios/{NOME}/cartoes/{id}        { nome, numero, criadoEm }
 //   extrato_usuarios/{NOME}/faturas/{id}        { cartaoId, competencia, situacao, totais, pagamento, importacoes }
 //   extrato_usuarios/{NOME}/compras/{id}        { cartaoId, faturaId, data, valor, estabelecimento, lojaId, ... }
+//   extrato_usuarios/{NOME}/exclusoes/{tipo_id} { tipo, id, em }  compra ou fatura apagada
 //   extrato_lojas/{id}                          { nome, nomeNormalizado, categoria, padroes } (compartilhadas)
 //   extrato_ignorados/{estabelecimento}         { ignoradoPor, em } (compartilhados)
+//   extrato_exclusoes/{loja_id}                 { tipo, id, em }  loja apagada (compartilhadas)
+//
+// Sincronização com o aparelho: toda gravação em cartão, fatura, compra e loja marca
+// atualizadoEm, e toda exclusão deixa uma marcação em "exclusoes". Assim mudancas(desde)
+// devolve só o que mudou, sem reler tudo.
 //
 // Datas são gravadas como texto ISO ("2026-11-21T12:00:00.000Z") e datas de compra como "AAAA-MM-DD".
 import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
@@ -19,6 +25,7 @@ import { contarLeituras } from "../leituras.js";
 export const COLECAO_USUARIOS = "extrato_usuarios";
 export const COLECAO_LOJAS = "extrato_lojas";
 export const COLECAO_IGNORADOS = "extrato_ignorados";
+export const COLECAO_EXCLUSOES = "extrato_exclusoes";
 
 // Limite de escritas numa transação do Firestore (500), com folga.
 const MAXIMO_ESCRITAS = 480;
@@ -72,6 +79,11 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
   const cartoes = (u) => usuarios.doc(u).collection("cartoes");
   const faturas = (u) => usuarios.doc(u).collection("faturas");
   const compras = (u) => usuarios.doc(u).collection("compras");
+  const exclusoes = (u) => usuarios.doc(u).collection("exclusoes");
+  const colExclusoes = db.collection(COLECAO_EXCLUSOES);
+  const agora = () => new Date().toISOString();
+  /** Marcação de exclusão: o aparelho apaga o item na próxima sincronização. */
+  const exclusao = (colecao, tipo, id) => [colecao.doc(`${tipo}_${id}`), { tipo, id, em: agora() }];
 
   // Cache em memória da instância: { em, valor }.
   let cacheLojas = null;
@@ -84,7 +96,14 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
   const incremento = (valor, quantidade) => ({
     totalCompras: FieldValue.increment(valor),
     quantidade: FieldValue.increment(quantidade),
+    atualizadoEm: agora(),
   });
+
+  /** Documentos de uma coleção: todos (desde = null) ou os alterados depois de `desde`. */
+  async function lerDesde(colecao, campo, desde, montar = comId) {
+    const consulta = desde ? colecao.where(campo, ">", desde) : colecao;
+    return contar(await consulta.get()).docs.map(montar);
+  }
 
   /** Grava em lotes de até 500 operações (fora de transação). */
   async function gravarEmLotes(operacoes) {
@@ -129,8 +148,9 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       return db.runTransaction(async (t) => {
         const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
-        t.update(ref, campos);
-        return { ...comId(snap), ...campos };
+        const novos = { ...campos, atualizadoEm: agora() };
+        t.update(ref, novos);
+        return { ...comId(snap), ...novos };
       });
     },
 
@@ -151,7 +171,12 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       const ref = faturas(u).doc(id);
       if (!contar(await ref.get()).exists) return false;
       const doFatura = contar(await compras(u).where("faturaId", "==", id).select().get());
-      await gravarEmLotes([...doFatura.docs.map((d) => (b) => b.delete(d.ref)), (b) => b.delete(ref)]);
+      // A marcação da fatura vale para as compras dela: o aparelho apaga as duas coisas.
+      const [refExclusao, dadosExclusao] = exclusao(exclusoes(u), "fatura", id);
+      await gravarEmLotes([
+        ...doFatura.docs.map((d) => (b) => b.delete(d.ref)),
+        (b) => b.delete(ref).set(refExclusao, dadosExclusao),
+      ]);
       return true;
     },
 
@@ -166,13 +191,19 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       return snap.exists ? comId(snap) : null;
     },
 
-    /** Compra manual: id gerado pelo Firestore; soma no total da fatura. null se a fatura não existe. */
+    /**
+     * Compra manual; soma no total da fatura. null se a fatura não existe.
+     * Com `compra.id` (criada offline no aparelho), repetir o pedido não duplica: devolve a que já existe.
+     */
     async criarCompra(u, compra) {
       const refFatura = faturas(u).doc(compra.faturaId);
-      const ref = compras(u).doc();
+      const ref = compra.id ? compras(u).doc(compra.id) : compras(u).doc();
       return db.runTransaction(async (t) => {
-        if (!contar(await t.get(refFatura)).exists) return null;
-        const { id, ...dados } = compra;
+        const [fatura, existente] = contar(await t.getAll(refFatura, ref));
+        if (existente.exists) return comId(existente);
+        if (!fatura.exists) return null;
+        const { id, ...resto } = compra;
+        const dados = { ...resto, atualizadoEm: agora() };
         t.create(ref, dados);
         t.update(refFatura, incremento(compra.valor, 1));
         return { ...dados, id: ref.id };
@@ -186,7 +217,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
         const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         const atual = comId(snap);
-        const campos = alterar(structuredClone(atual));
+        const campos = { ...alterar(structuredClone(atual)), atualizadoEm: agora() };
         const nova = { ...atual, ...campos };
         t.update(ref, campos);
         if (nova.valor !== atual.valor) {
@@ -205,6 +236,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
         const refFatura = faturas(u).doc(atual.faturaId);
         const fatura = contar(await t.get(refFatura));
         t.delete(ref);
+        t.set(...exclusao(exclusoes(u), "compra", id));
         if (fatura.exists) t.update(refFatura, incremento(-atual.valor, -1));
         return atual;
       });
@@ -248,7 +280,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
 
     async atualizarCompras(u, mudancas) {
       await gravarEmLotes(
-        mudancas.map(({ id, ...campos }) => (b) => b.update(compras(u).doc(id), campos))
+        mudancas.map(({ id, ...campos }) => (b) => b.update(compras(u).doc(id), { ...campos, atualizadoEm: agora() }))
       );
     },
 
@@ -292,24 +324,30 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
           d.quantidade -= 1;
           decrementos.set(m.deFaturaId, d);
         }
-        const escritas = 1 + e.criar.length + e.mover.length + e.remover.length + decrementos.size + (e.cartao ? 1 : 0) + (e.pagamento ? 1 : 0);
+        // Cada compra removida conta duas: a exclusão e a marcação para os aparelhos.
+        const escritas = 1 + e.criar.length + e.mover.length + 2 * e.remover.length + decrementos.size + (e.cartao ? 1 : 0) + (e.pagamento ? 1 : 0);
         if (escritas > MAXIMO_ESCRITAS) {
           throw new ErroHttp(413, `Arquivo grande demais para uma importação (${escritas} alterações; máximo ${MAXIMO_ESCRITAS})`);
         }
 
         if (e.cartao) {
           const { id, ...dados } = e.cartao;
-          t.set(cartoes(u).doc(id), dados, { merge: true });
+          t.set(cartoes(u).doc(id), { ...dados, atualizadoEm: agora() }, { merge: true });
         }
-        for (const { id } of e.remover) t.delete(compras(u).doc(id));
-        for (const m of e.mover) t.update(compras(u).doc(m.id), { faturaId: m.faturaId });
+        for (const { id } of e.remover) {
+          t.delete(compras(u).doc(id));
+          t.set(...exclusao(exclusoes(u), "compra", id));
+        }
+        for (const m of e.mover) t.update(compras(u).doc(m.id), { faturaId: m.faturaId, atualizadoEm: agora() });
         for (const [faturaId, d] of decrementos) {
           t.update(faturas(u).doc(faturaId), incremento(d.valor, d.quantidade));
         }
-        for (const { id, ...dados } of e.criar) t.create(compras(u).doc(id), dados);
+        for (const { id, ...dados } of e.criar) t.create(compras(u).doc(id), { ...dados, atualizadoEm: agora() });
         const { id: faturaId, ...dadosFatura } = e.fatura;
         t.set(faturas(u).doc(faturaId), dadosFatura);
-        if (e.pagamento) t.update(faturas(u).doc(e.pagamento.faturaId), { pagamento: e.pagamento.pagamento });
+        if (e.pagamento) {
+          t.update(faturas(u).doc(e.pagamento.faturaId), { pagamento: e.pagamento.pagamento, atualizadoEm: agora() });
+        }
         return plano;
       };
 
@@ -337,7 +375,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
       const criada = await db.runTransaction(async (t) => {
         const iguais = contar(await t.get(colLojas.where("nomeNormalizado", "==", nomeNormalizado).limit(1)));
         if (!iguais.empty) return null;
-        const { id, ...dados } = { ...loja, nomeNormalizado };
+        const { id, ...dados } = { ...loja, nomeNormalizado, atualizadoEm: agora() };
         t.create(ref, dados);
         return { ...dados, id: ref.id };
       });
@@ -353,6 +391,7 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
         const atual = comId(snap);
         const nova = { ...atual, ...alterar(structuredClone(atual)) };
         nova.nomeNormalizado = normalizar(nova.nome);
+        nova.atualizadoEm = agora();
         if (nova.nomeNormalizado !== atual.nomeNormalizado) {
           const iguais = contar(await t.get(colLojas.where("nomeNormalizado", "==", nova.nomeNormalizado).limit(2)));
           if (iguais.docs.some((d) => d.id !== id)) throw new ErroHttp(409, `Já existe uma loja chamada ${nova.nome}`);
@@ -371,10 +410,29 @@ export function criarRepositorioFirestore(db = conectarFirestore()) {
         const snap = contar(await t.get(ref));
         if (!snap.exists) return null;
         t.delete(ref);
+        t.set(...exclusao(colExclusoes, "loja", id));
         return comId(snap);
       });
       limparCache();
       return excluida;
+    },
+
+    // ---------- sincronização com o aparelho ----------
+    /**
+     * Cartões, faturas, compras e lojas alterados depois de `desde` (ISO), e as exclusões
+     * [{ tipo, id, em }]. Sem `desde`, tudo (primeira carga do aparelho) e nenhuma exclusão.
+     */
+    async mudancas(u, desde = null) {
+      const [listaCartoes, listaFaturas, listaCompras, lojas, doUsuario, deLojas] = await Promise.all([
+        lerDesde(cartoes(u), "atualizadoEm", desde),
+        lerDesde(faturas(u), "atualizadoEm", desde),
+        lerDesde(compras(u), "atualizadoEm", desde),
+        lerDesde(colLojas, "atualizadoEm", desde),
+        // O id do documento da marcação é "tipo_id"; o que vale são os campos dela.
+        desde ? lerDesde(exclusoes(u), "em", desde, (d) => d.data()) : [],
+        desde ? lerDesde(colExclusoes, "em", desde, (d) => d.data()) : [],
+      ]);
+      return { cartoes: listaCartoes, faturas: listaFaturas, compras: listaCompras, lojas, exclusoes: [...doUsuario, ...deLojas] };
     },
 
     // ---------- estabelecimentos ignorados (compartilhados) ----------

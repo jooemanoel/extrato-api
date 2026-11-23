@@ -9,14 +9,23 @@ const copiar = (valor) => structuredClone(valor);
 const porDataDesc = (a, b) => b.data.localeCompare(a.data) || a.id.localeCompare(b.id);
 const novoId = () => randomBytes(15).toString("base64url").replace(/[-_]/g, "x").slice(0, 20);
 
+// Relógio que nunca repete nem volta: duas gravações no mesmo milissegundo (comum nos testes)
+// ganham horários diferentes, como aconteceria no Firestore real com requisições separadas.
+let ultimoInstante = 0;
+function agora() {
+  ultimoInstante = Math.max(Date.now(), ultimoInstante + 1);
+  return new Date(ultimoInstante).toISOString();
+}
+
 export function criarRepositorioMemoria() {
   const usuarios = new Map(); // id -> { id, nome, senhaHash, criadoEm }
   const dados = new Map(); // usuarioId -> { cartoes, faturas, compras } (Maps)
   const lojas = new Map(); // id -> loja
   const ignorados = new Map(); // estabelecimento -> { estabelecimento, ignoradoPor, em }
+  const exclusoesDeLojas = []; // [{ tipo: "loja", id, em }]
 
   const doUsuario = (id) => {
-    if (!dados.has(id)) dados.set(id, { cartoes: new Map(), faturas: new Map(), compras: new Map() });
+    if (!dados.has(id)) dados.set(id, { cartoes: new Map(), faturas: new Map(), compras: new Map(), exclusoes: [] });
     return dados.get(id);
   };
 
@@ -26,7 +35,10 @@ export function criarRepositorioMemoria() {
     if (!fatura) return;
     fatura.totalCompras = (fatura.totalCompras ?? 0) + valor;
     fatura.quantidade = (fatura.quantidade ?? 0) + quantidade;
+    fatura.atualizadoEm = agora();
   };
+  const marcarExclusao = (lista, tipo, id) => lista.push({ tipo, id, em: agora() });
+  const desde = (lista, campo, instante) => lista.filter((x) => !instante || (x[campo] && x[campo] > instante)).map(copiar);
 
   const nomeEmUso = (nome, excetoId) =>
     [...lojas.values()].some((l) => l.id !== excetoId && l.nomeNormalizado === normalizar(nome));
@@ -52,7 +64,7 @@ export function criarRepositorioMemoria() {
     async alterarCartao(u, id, campos) {
       const cartao = doUsuario(u).cartoes.get(id);
       if (!cartao) return null;
-      Object.assign(cartao, campos);
+      Object.assign(cartao, campos, { atualizadoEm: agora() });
       return copiar(cartao);
     },
 
@@ -67,9 +79,10 @@ export function criarRepositorioMemoria() {
       return fatura ? copiar(fatura) : null;
     },
     async excluirFatura(u, id) {
-      const { faturas, compras } = doUsuario(u);
+      const { faturas, compras, exclusoes } = doUsuario(u);
       if (!faturas.delete(id)) return false;
       for (const [cid, c] of compras) if (c.faturaId === id) compras.delete(cid);
+      marcarExclusao(exclusoes, "fatura", id);
       return true;
     },
 
@@ -83,8 +96,9 @@ export function criarRepositorioMemoria() {
     },
     async criarCompra(u, compra) {
       const { faturas, compras } = doUsuario(u);
+      if (compra.id && compras.has(compra.id)) return copiar(compras.get(compra.id));
       if (!faturas.has(compra.faturaId)) return null;
-      const nova = { ...copiar(compra), id: novoId() };
+      const nova = { ...copiar(compra), id: compra.id ?? novoId(), atualizadoEm: agora() };
       compras.set(nova.id, nova);
       incrementar(u, nova.faturaId, nova.valor, 1);
       return copiar(nova);
@@ -93,16 +107,17 @@ export function criarRepositorioMemoria() {
       const { compras } = doUsuario(u);
       const atual = compras.get(id);
       if (!atual) return null;
-      const nova = { ...atual, ...alterar(copiar(atual)) };
+      const nova = { ...atual, ...alterar(copiar(atual)), atualizadoEm: agora() };
       compras.set(id, nova);
       incrementar(u, nova.faturaId, nova.valor - atual.valor, 0);
       return copiar(nova);
     },
     async excluirCompra(u, id) {
-      const { compras } = doUsuario(u);
+      const { compras, exclusoes } = doUsuario(u);
       const atual = compras.get(id);
       if (!atual) return null;
       compras.delete(id);
+      marcarExclusao(exclusoes, "compra", id);
       incrementar(u, atual.faturaId, -atual.valor, -1);
       return copiar(atual);
     },
@@ -125,7 +140,7 @@ export function criarRepositorioMemoria() {
     async atualizarCompras(u, mudancas) {
       const { compras } = doUsuario(u);
       for (const { id, ...campos } of mudancas) {
-        if (compras.has(id)) Object.assign(compras.get(id), copiar(campos));
+        if (compras.has(id)) Object.assign(compras.get(id), copiar(campos), { atualizadoEm: agora() });
       }
     },
 
@@ -144,15 +159,20 @@ export function criarRepositorioMemoria() {
       if (!gravar) return plano;
 
       const e = plano.escritas;
-      if (e.cartao) d.cartoes.set(e.cartao.id, copiar(e.cartao));
-      for (const { id } of e.remover) d.compras.delete(id);
+      if (e.cartao) d.cartoes.set(e.cartao.id, { ...copiar(e.cartao), atualizadoEm: agora() });
+      for (const { id } of e.remover) {
+        d.compras.delete(id);
+        marcarExclusao(d.exclusoes, "compra", id);
+      }
       for (const m of e.mover) {
-        d.compras.get(m.id).faturaId = m.faturaId;
+        Object.assign(d.compras.get(m.id), { faturaId: m.faturaId, atualizadoEm: agora() });
         incrementar(u, m.deFaturaId, -m.valor, -1);
       }
-      for (const c of e.criar) d.compras.set(c.id, copiar(c));
-      d.faturas.set(e.fatura.id, copiar(e.fatura));
-      if (e.pagamento) d.faturas.get(e.pagamento.faturaId).pagamento = copiar(e.pagamento.pagamento);
+      for (const c of e.criar) d.compras.set(c.id, { ...copiar(c), atualizadoEm: agora() });
+      d.faturas.set(e.fatura.id, { ...copiar(e.fatura), atualizadoEm: agora() });
+      if (e.pagamento) {
+        Object.assign(d.faturas.get(e.pagamento.faturaId), { pagamento: copiar(e.pagamento.pagamento), atualizadoEm: agora() });
+      }
       return plano;
     },
 
@@ -165,7 +185,7 @@ export function criarRepositorioMemoria() {
     },
     async criarLoja(loja) {
       if (nomeEmUso(loja.nome)) return null;
-      const nova = { ...copiar(loja), id: novoId(), nomeNormalizado: normalizar(loja.nome) };
+      const nova = { ...copiar(loja), id: novoId(), nomeNormalizado: normalizar(loja.nome), atualizadoEm: agora() };
       lojas.set(nova.id, nova);
       return copiar(nova);
     },
@@ -175,6 +195,7 @@ export function criarRepositorioMemoria() {
       const nova = { ...atual, ...alterar(copiar(atual)) };
       if (nomeEmUso(nova.nome, id)) throw new ErroHttp(409, `Já existe uma loja chamada ${nova.nome}`);
       nova.nomeNormalizado = normalizar(nova.nome);
+      nova.atualizadoEm = agora();
       lojas.set(id, nova);
       return copiar(nova);
     },
@@ -182,7 +203,20 @@ export function criarRepositorioMemoria() {
       const atual = lojas.get(id);
       if (!atual) return null;
       lojas.delete(id);
+      marcarExclusao(exclusoesDeLojas, "loja", id);
       return copiar(atual);
+    },
+
+    // ---------- sincronização com o aparelho ----------
+    async mudancas(u, instante = null) {
+      const d = doUsuario(u);
+      return {
+        cartoes: desde([...d.cartoes.values()], "atualizadoEm", instante),
+        faturas: desde([...d.faturas.values()], "atualizadoEm", instante),
+        compras: desde([...d.compras.values()], "atualizadoEm", instante),
+        lojas: desde([...lojas.values()], "atualizadoEm", instante),
+        exclusoes: instante ? desde([...d.exclusoes, ...exclusoesDeLojas], "em", instante) : [],
+      };
     },
 
     // ---------- estabelecimentos ignorados (compartilhados) ----------

@@ -7,6 +7,7 @@ import { rotasCompras } from "./routes/compras.js";
 import { rotasCartoes, rotasFaturas } from "./routes/faturas.js";
 import { rotasImportacoes } from "./routes/importacoes.js";
 import { rotasCategorias, rotasIgnorados, rotasLojas } from "./routes/lojas.js";
+import { rotasSincronizacao } from "./routes/sincronizacao.js";
 import { ErroHttp } from "./validacao.js";
 import { registrarLeituras } from "./leituras.js";
 
@@ -28,6 +29,8 @@ export function criarApp({ repo, config }) {
   // O texto do OFX vai no corpo: uma fatura grande tem ~25 KB. Esse parser vem antes;
   // com o corpo já lido, o seguinte não lê de novo.
   app.use("/importacoes", express.json({ limit: "2mb" }));
+  // A fila de alterações feitas offline: até 200 operações.
+  app.use("/sincronizacao", express.json({ limit: "200kb" }));
   app.use(express.json({ limit: "50kb" }));
   // Depois dos leitores de JSON: o contexto da contagem vale para tudo o que a rota fizer.
   app.use(registrarLeituras);
@@ -50,6 +53,7 @@ export function criarApp({ repo, config }) {
   app.use("/importacoes", rotasImportacoes({ repo, config }));
   app.use("/lojas", rotasLojas({ repo, config }));
   app.use("/ignorados", rotasIgnorados({ repo, config }));
+  app.use("/sincronizacao", rotasSincronizacao({ repo, config }));
 
   app.use((req, res) => {
     res.status(404).json({ erro: "Rota não encontrada" });
