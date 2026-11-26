@@ -51,8 +51,12 @@ function nomeDoCartao(trecho) {
   return /[A-Z]/.test(nome) ? nome.slice(0, 60) : null;
 }
 
-/** Pagamento da fatura anterior ("PGTO DEBITO CONTA ..."): crédito que não é compra nem estorno. */
-const ehPagamento = (t) => t.valor > 0 && /^PGTO\b/i.test(t.memo.trim());
+/**
+ * Pagamento da fatura anterior ("PGTO DEBITO CONTA ..."): não é compra nem estorno.
+ * Reconhecido só pelo MEMO: na fatura fechada vem positivo, mas na aberta ("Próxima_Fatura")
+ * o BB o exporta com sinal negativo, como se fosse compra.
+ */
+const ehPagamento = (t) => /^PGTO\b/i.test(t.memo.trim());
 
 /**
  * Id da compra: o mesmo lançamento gera sempre o mesmo id, em qualquer exportação.
@@ -82,11 +86,14 @@ export function atribuirIds(lancamentos) {
  * Ordem: a informada pelo usuário; a do nome do arquivo; senão o mês seguinte ao da compra
  * mais antiga que não é parcela (parcelas mantêm a data da compra original).
  */
-function deduzirCompetencia(lancamentos) {
+function deduzirCompetencia(lancamentos, pagamentos) {
   const semParcela = lancamentos.filter((l) => !l.parcela);
   const datas = (semParcela.length ? semParcela : lancamentos).map((l) => l.data).sort();
-  if (!datas.length) return null;
-  return somarMes(datas[0].slice(0, 7), 1);
+  if (datas.length) return somarMes(datas[0].slice(0, 7), 1);
+  // Fatura só com o pagamento da anterior (aberta e ainda sem compras): o pagamento cai no
+  // vencimento da anterior, então esta vence no mês seguinte ao dele.
+  const datasPgto = pagamentos.map((p) => p.data).sort();
+  return datasPgto.length ? somarMes(datasPgto.at(-1).slice(0, 7), 1) : null;
 }
 
 export function analisarArquivo({ conteudo, nomeArquivo, competencia = null }) {
@@ -115,7 +122,7 @@ export function analisarArquivo({ conteudo, nomeArquivo, competencia = null }) {
     origemCompetencia = "arquivo";
   }
   if (!competencia) {
-    competencia = deduzirCompetencia(lancamentos);
+    competencia = deduzirCompetencia(lancamentos, pagamentos);
     origemCompetencia = "datas";
   }
   if (!competencia) throw new ErroHttp(422, "Arquivo sem lançamentos: informe a competência (AAAA-MM)");
@@ -132,7 +139,7 @@ export function analisarArquivo({ conteudo, nomeArquivo, competencia = null }) {
     situacao,
     saldo: ofx.saldo,
     lancamentos,
-    pagamentos: pagamentos.map((p) => ({ data: p.data, valor: p.valor, memo: p.memo.trim() })),
+    pagamentos: pagamentos.map((p) => ({ data: p.data, valor: Math.abs(p.valor), memo: p.memo.trim() })),
   };
 }
 

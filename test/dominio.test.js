@@ -120,6 +120,25 @@ describe("id das compras", () => {
     assert.match(a.lancamentos[0].id, /_0304_1$/);
     assert.equal(a.lancamentos[1].tipo, "estorno");
   });
+
+  test("na fatura aberta o PGTO vem negativo e mesmo assim não é compra", () => {
+    const linhas = [
+      ["20261123", "-5846.45", "PGTO DEBITO CONTA 0000 000000000  000"],
+      ["20261125", "-5.50", "BRB MOBILIDADE PMS"],
+      ["20261126", "12.00", "LOJA QUE ESTORNOU"],
+    ];
+    const a = analisarArquivo({ conteudo: gerarOfx({ aberta: true, linhas }), nomeArquivo: "X-Próxima_Fatura.ofx" });
+    assert.deepEqual(a.lancamentos.map((l) => l.tipo), ["compra", "estorno"]);
+    assert.equal(a.pagamentos[0].valor, 584645);
+  });
+
+  test("fatura aberta só com o PGTO: sem compras, competência no mês seguinte ao pagamento", () => {
+    const linhas = [["20261123", "-28.50", "PGTO DEBITO CONTA 0000 000000000  000"]];
+    const a = analisarArquivo({ conteudo: gerarOfx({ aberta: true, linhas }), nomeArquivo: "X-Próxima_Fatura.ofx" });
+    assert.equal(a.lancamentos.length, 0);
+    assert.equal(a.pagamentos[0].valor, 2850);
+    assert.equal(a.competencia, "2026-12");
+  });
 });
 
 describe("reconhecimento de lojas", () => {
