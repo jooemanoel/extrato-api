@@ -22,6 +22,7 @@ import { ErroHttp } from "../validacao.js";
 import { normalizar } from "../dominio/estabelecimento.js";
 import { contarLeituras } from "../leituras.js";
 
+// O prefixo extrato_ ficou do nome antigo do app (Extrato) de propósito: trocar exigiria migrar os dados.
 export const COLECAO_USUARIOS = "extrato_usuarios";
 export const COLECAO_LOJAS = "extrato_lojas";
 export const COLECAO_IGNORADOS = "extrato_ignorados";

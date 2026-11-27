@@ -6,6 +6,7 @@ import { ErroHttp } from "./validacao.js";
 // Custo 11: ~2^11 rodadas. Lento o bastante para atrapalhar força bruta,
 // rápido o bastante para um login em função serverless.
 const CUSTO_BCRYPT = 11;
+// Mantido do nome antigo: trocar invalidaria as sessões abertas.
 const EMISSOR = "extrato-api";
 
 export const gerarHash = (senha) => bcrypt.hash(senha, CUSTO_BCRYPT);

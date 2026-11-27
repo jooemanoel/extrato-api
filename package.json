@@ -1,8 +1,8 @@
 {
-  "name": "extrato-api",
+  "name": "fatura-api",
   "version": "1.0.0",
   "private": true,
-  "description": "API em Express para o app Extrato: importação de faturas OFX do cartão, lojas compartilhadas e acesso ao Firestore pelo servidor",
+  "description": "API em Express para o app Fatura: importação de faturas OFX do cartão, lojas compartilhadas e acesso ao Firestore pelo servidor",
   "type": "module",
   "main": "src/index.js",
   "engines": {

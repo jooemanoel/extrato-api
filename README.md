@@ -1,6 +1,6 @@
-# extrato-api
+# fatura-api
 
-API em Express para o app **Extrato**: controle dos gastos do cartão de crédito a partir das
+API em Express para o app **Fatura** (antes Extrato): controle dos gastos do cartão de crédito a partir das
 faturas OFX do Banco do Brasil. Substitui o extrato-api-express (Postgres no Supabase, que
 hibernava após dias sem uso). Os dados ficam no Firestore, acessado só pelo servidor.
 

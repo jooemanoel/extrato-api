@@ -1,6 +1,6 @@
-# Modelagem do Extrato no Firestore
+# Modelagem do Fatura no Firestore
 
-Este documento registra o modelo de dados do Extrato depois da saída do Supabase, e o
+Este documento registra o modelo de dados do Fatura (antes Extrato) depois da saída do Supabase, e o
 porquê de cada decisão. As regras foram tiradas de arquivos OFX reais do Banco do Brasil
 e das 1.652 compras do banco antigo (novembro de 2026).
 

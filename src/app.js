@@ -42,7 +42,7 @@ export function criarApp({ repo, config }) {
   });
 
   app.get("/", (req, res) => {
-    res.json({ status: "ok", mensagem: "API Extrato no ar" });
+    res.json({ status: "ok", mensagem: "API Fatura no ar" });
   });
 
   app.use("/auth", rotasAuth({ repo, config }));
